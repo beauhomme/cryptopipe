@@ -4,7 +4,7 @@ import pandas as pd
 from bs4 import BeautifulSoup
 from datetime import date, datetime
 from configparser import ConfigParser
-from sqlalchemy import create_engine, Table, Column,  String, Integer, MetaData,  select, Numeric, DateTime, text, Float
+from sqlalchemy import create_engine, Table, Column,  String, Integer, MetaData, Date, DateTime, text, Float
 from sqlalchemy.dialects.mysql import insert
 import boto3
 import io
@@ -56,9 +56,9 @@ currency_details = Table(
 coinMarket_details = Table(
    'coinMarket_details', meta, 
    Column('coinRank', Integer, nullable=False), 
-   Column('coinId', String(15), nullable=False),
+   Column('coinId', String(15), primary_key=True, nullable=False),
    Column('coinName', String(100), nullable=False),
-   Column('coinSymbol', String(10), primary_key=True, nullable=False),
+   Column('coinSymbol', String(10), nullable=False),
    Column('coinLoc', String(15), nullable=False),
    Column('coinPrice', Float, nullable=False),
    Column('coin1hrChange', Float, nullable=False),
@@ -67,9 +67,9 @@ coinMarket_details = Table(
    Column('coin24hrVol', Float, nullable=False),
    Column('coinMarketCap', Float, nullable=False),
    Column('fetchTime', DateTime(), default=datetime.now),
+   Column('rankDate', Date(), primary_key=True, nullable=False),
    Column('rate', Float, nullable=False),
    Column('coinPriceNaira', Float, nullable=False),
-
 )
 
 try:
@@ -163,7 +163,8 @@ class fetchOn():
                                 coin7dChange=coin7dChange,
                                 coin24hrVol=coin24hrVol,
                                 coinMarketCap=coinMarketCap,
-                                fetchTime = str(datetime.now())
+                                fetchTime = str(datetime.now()),
+                                rankDate = str(datetime.date(datetime.now()))
                             )
                 coinBase.append(coinBag)
         return coinBase
@@ -175,8 +176,8 @@ class fetchOn():
         response = requests.get(exurl).json()
         return response['rates']
 
-    def fetchOnCoinsNairaRate():
-        coinList = fetchOn.fetchCoins()
+    def fetchOnCoinsWiNairaRate(pageNum=1):
+        coinList = fetchOn.fetchCoins(pageNum)
         nairaRate = fetchOn.fetchDailyRates()['NGN']
         for i in coinList:
             i['rate'] = float(nairaRate)
@@ -225,8 +226,6 @@ class fetchOn():
                     return (f"Unsuccessful S3 put_object response. Status - {status}")
         else:
             return coinIdlist
-
-            coinIdlist = fetchCoinsToS3()
 
     def fetchOhlc():
         print(f'{str(datetime.now())} - fetching coinId\'s from Dataframe')
@@ -297,6 +296,31 @@ class dbUpdate:
                 conn.execute(ins_on_duplicate_key)
         return "Rates Update Completed Successfully"
 
+    def updatecoinMarketDetailsTable(pageNum=1,state='wtdb'):
+        
+        p = fetchOn.fetchOnCoinsWiNairaRate(pageNum)
+        df_coinmarket = pd.DataFrame(p)
+        df_coinmarket['name']=df_coinmarket['coinName']
+
+        cg = CoinGeckoAPI()
+        p2 = cg.get_coins_list()
+        df_coinList = pd.DataFrame(p2)
+        df_coinList
+
+        df3= pd.merge(df_coinmarket, df_coinList[['id', 'name']], on='name', how='inner')
+        df3.rename(columns={"id" : "coinId"}, inplace=True)
+        df3 = df3[["coinRank","coinId","coinName","coinSymbol","coinLoc","coinPrice","coin1hrChange","coin24hrChange","coin7dChange","coin24hrVol","coinMarketCap","fetchTime","rankDate","rate","coinPriceNaira"]]
+
+        coinList = df3.to_dict('records')
+        coinIdlist = list(df3['coinId'])
+
+        if state == 'wtdb':
+            with conn:
+                conn.execute(coinMarket_details.insert(), coinList)
+            return "Coin Market Details Updated Successfully"
+        else:
+            return coinIdlist
+
 
 class fetchDb():
 
@@ -322,7 +346,8 @@ class fetchDb():
 
 
 # obj = fetchmap.fetchCoins()[0]
-print(fetchOn.fetchOhlc())
+dbUpdate.updatecoinMarketDetailsTable()
+# print(fetchOn.fetchOnCoinsNairaRate()[0])
  
 # s3 = boto3.client('s3')
 # json_object = obj
